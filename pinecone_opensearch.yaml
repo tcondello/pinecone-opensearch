@@ -1,0 +1,49 @@
+# Example config for pinecone-opensearch (M0 translate dry-run)
+
+mode: strict  # strict | approx | shadow
+
+indices:
+  products:
+    pinecone_index: products-pinecone
+    default_namespace: __default__
+    namespace_from_routing: true
+    knn_field: embedding
+    mapping:
+      properties:
+        title:
+          type: text
+          fields:
+            keyword:
+              type: keyword
+        description:
+          type: text
+        brand:
+          type: keyword
+        category:
+          type: keyword
+        price:
+          type: float
+        in_stock:
+          type: boolean
+        address:
+          type: object
+          properties:
+            city:
+              type: keyword
+            zip:
+              type: keyword
+        embedding:
+          type: knn_vector
+          dimension: 3
+          space_type: cosinesimil
+
+aliases:
+  products_alias: products
+
+embedders: {}
+search_pipelines: {}
+
+limits:
+  max_result_window: 10000
+
+include_pinecone_meta: true

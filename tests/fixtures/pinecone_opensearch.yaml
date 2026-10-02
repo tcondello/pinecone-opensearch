@@ -1,0 +1,39 @@
+mode: strict
+
+indices:
+  products:
+    pinecone_index: products-pinecone
+    default_namespace: __default__
+    knn_field: embedding
+    mapping:
+      properties:
+        title:
+          type: text
+          fields:
+            keyword:
+              type: keyword
+        description:
+          type: text
+        brand:
+          type: keyword
+        category:
+          type: keyword
+        price:
+          type: float
+        in_stock:
+          type: boolean
+        address:
+          type: object
+          properties:
+            city:
+              type: keyword
+        embedding:
+          type: knn_vector
+          dimension: 3
+          space_type: cosinesimil
+
+aliases:
+  products_alias: products
+
+limits:
+  max_result_window: 10000

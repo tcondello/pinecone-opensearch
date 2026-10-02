@@ -1,0 +1,50 @@
+mode: strict
+
+indices:
+  scifact:
+    pinecone_index: pc-os-scifact
+    default_namespace: __default__
+    knn_field: embedding
+    mapping:
+      properties:
+        title: { type: text }
+        text: { type: text }
+        embedding: { type: knn_vector, dimension: 1024, space_type: cosinesimil }
+
+  scifact-meta:
+    pinecone_index: pc-os-scifact-meta
+    default_namespace: __default__
+    knn_field: embedding
+    mapping:
+      properties:
+        title: { type: text }
+        text: { type: text }
+        category: { type: keyword }
+        tags: { type: keyword }
+        year: { type: integer }
+        cited_by: { type: integer }
+        open_access: { type: boolean }
+        published: { type: date }
+        embedding: { type: knn_vector, dimension: 1024, space_type: cosinesimil }
+
+embedders:
+  llama-text-embed-v2:
+    type: pinecone
+    model: llama-text-embed-v2
+    parameters: { input_type: query, dimension: 1024 }
+
+search_pipelines:
+  hybrid-norm:
+    phase_results_processors:
+      - normalization-processor:
+          normalization: { technique: min_max }
+          combination:
+            technique: arithmetic_mean
+            parameters: { weights: [0.3, 0.7] }
+
+deployment:
+  deployment_type: managed
+  cloud: aws
+  region: us-east-1
+
+include_pinecone_meta: true
