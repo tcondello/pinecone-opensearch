@@ -248,9 +248,39 @@ def _handle_bool_query(payload, *, context, path, parsed, index, registry):
 
     for i, clause in enumerate(must):
         _walk_query(clause, context="query", path=f"{path}.must[{i}]", parsed=parsed, index=index, registry=registry)
+    should_filters: list[Any] = []
+    should_scoring = 0
     for i, clause in enumerate(should):
-        # should scores in query context
-        _walk_query(clause, context="query", path=f"{path}.should[{i}]", parsed=parsed, index=index, registry=registry)
+        sub = ParsedBody()
+        _walk_query(clause, context="query", path=f"{path}.should[{i}]", parsed=sub, index=index, registry=registry)
+        _merge_parse(parsed, sub)
+        parsed.scoring.extend(sub.scoring)
+        should_scoring += len(sub.scoring)
+        if len(sub.filter_clauses) == 1:
+            should_filters.append(sub.filter_clauses[0])
+        elif sub.filter_clauses:
+            should_filters.append({"bool": {"filter": sub.filter_clauses}})
+
+    required = 0 if (must or filt) else 1
+    if msm is not None:
+        try:
+            required = 0 if str(msm) == "0%" else int(msm)
+        except (TypeError, ValueError):
+            parsed.unsupported.append((f"{path}.minimum_should_match", f"unsupported minimum_should_match {msm!r}"))
+    if required > 1 and should:
+        parsed.unsupported.append((f"{path}.minimum_should_match", "minimum_should_match > 1 is not supported"))
+    elif should_filters:
+        if required == 0:
+            parsed.warnings.append(
+                f"{path}.should: constant-score clauses only add score when must/filter is present; dropped"
+            )
+        elif should_scoring:
+            parsed.warnings.append(
+                f"{path}.should: mixes scoring and constant-score clauses; constant-score clauses dropped"
+            )
+        else:
+            parsed.filter_clauses.append({"bool": {"should": should_filters}})
+
     for i, clause in enumerate(filt):
         _walk_as_filter(clause, path=f"{path}.filter[{i}]", parsed=parsed, index=index, registry=registry)
     for i, clause in enumerate(must_not):

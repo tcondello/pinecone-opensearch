@@ -6,7 +6,9 @@ import json
 from types import SimpleNamespace
 from typing import Any, Mapping, Sequence
 
-from pinecone_opensearch import OpenSearch, helpers
+import pytest
+
+from pinecone_opensearch import OpenSearch, UnsupportedQueryError, helpers
 from .fakes import make_backend
 
 CFG = {
@@ -176,3 +178,82 @@ def test_update_refresh_waits_for_patched_values():
     client.update(index="meta", id="d1", body={"doc": {"year": 2020}}, refresh="wait_for")
 
     assert client.get(index="meta", id="d1")["_source"]["year"] == 2020
+
+
+COUNT_CFG = {
+    "mode": "strict",
+    "indices": {
+        "c": {
+            "pinecone_index": "c-pinecone",
+            "knn_field": "embedding",
+            "mapping": {
+                "properties": {
+                    "category": {"type": "keyword"},
+                    "open": {"type": "boolean"},
+                    "embedding": {"type": "knn_vector", "dimension": 3, "space_type": "cosinesimil"},
+                }
+            },
+        }
+    },
+}
+
+SHOULD_ONLY = {"bool": {"should": [{"term": {"category": "a"}}, {"term": {"open": False}}], "minimum_should_match": 1}}
+
+
+def _count_client(n: int = 12) -> tuple[OpenSearch, Any, list[str]]:
+    backend, _store, created = make_backend()
+    created.add("c-pinecone")
+    client = OpenSearch(config=COUNT_CFG, backend=backend)
+    for i in range(n):
+        client.index(index="c", id=str(i), body={"category": "abc"[i % 3], "open": i % 2 == 0, "embedding": [0.1, 0.2, 0.3]})
+    docs_api = backend.documents("c-pinecone")
+    calls: list[str] = []
+    for name in ("search", "fetch", "list"):
+        original = getattr(docs_api, name, None)
+        if original is None:
+            continue
+
+        def wrapper(*args: Any, _name: str = name, _original: Any = original, **kwargs: Any) -> Any:
+            calls.append(_name)
+            return _original(*args, **kwargs)
+
+        setattr(docs_api, name, wrapper)
+    backend._indexes["c-pinecone"].documents = docs_api
+    return client, backend, calls
+
+
+def test_should_only_term_clauses_are_ored():
+    client, _, _ = _count_client()
+    plan = client.translate(index="c", body={"query": SHOULD_ONLY})
+    assert plan["calls"][0]["request"]["filter"] == {"$or": [{"category": {"$eq": "a"}}, {"open": {"$eq": False}}]}
+    assert client.count(index="c", body={"query": SHOULD_ONLY})["count"] == 8
+
+
+def test_should_constant_clauses_with_filter_are_dropped_with_warning():
+    client, _, _ = _count_client()
+    body = {"query": {"bool": {"filter": [{"term": {"open": True}}], "should": [{"term": {"category": "a"}}]}}}
+    plan = client.translate(index="c", body=body)
+    assert plan["calls"][0]["request"]["filter"] == {"open": {"$eq": True}}
+    assert any("should" in w and "dropped" in w for w in plan["warnings"])
+
+
+def test_should_minimum_should_match_above_one_is_unsupported():
+    client, _, _ = _count_client()
+    body = {"query": {"bool": {"should": [{"term": {"category": "a"}}, {"term": {"open": True}}], "minimum_should_match": 2}}}
+    with pytest.raises(UnsupportedQueryError):
+        client.translate(index="c", body=body)
+
+
+def test_filtered_count_uses_one_ids_only_search():
+    client, _, calls = _count_client()
+    assert client.count(index="c", body={"query": {"term": {"category": "b"}}})["count"] == 4
+    assert calls == ["search"]
+
+
+def test_filtered_count_falls_back_to_fetch_when_search_saturates(monkeypatch):
+    import pinecone_opensearch.client as client_mod
+
+    monkeypatch.setattr(client_mod, "_COUNT_SEARCH_TOP_K", 3)
+    client, _, calls = _count_client()
+    assert client.count(index="c", body={"query": {"term": {"open": True}}})["count"] == 6
+    assert calls == ["search", "fetch"]

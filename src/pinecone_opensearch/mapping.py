@@ -16,6 +16,7 @@ class FieldInfo:
     metric: str | None = None
     format: str | None = None
     has_keyword_subfield: bool = False
+    dimension: int | None = None
     full_text_search: bool = False
 
 
@@ -87,6 +88,7 @@ class MappingRegistry:
                 format=spec.get("format"),
             )
             if os_type == "knn_vector":
+                info.dimension = int(spec["dimension"]) if spec.get("dimension") else None
                 space = (spec.get("space_type") or "cosinesimil").lower()
                 info.metric = {
                     "cosinesimil": "cosine",
@@ -126,6 +128,13 @@ class MappingRegistry:
     def pinecone_types(self, index: str) -> dict[str, str]:
         """Pinecone field name → OpenSearch type for read-side value restoration."""
         return {f.pinecone_name: f.os_type for f in (self._by_index.get(index) or {}).values()}
+
+    def dense_field(self, index: str) -> FieldInfo | None:
+        """The index's knn_vector field when its dimension is known."""
+        for info in (self._by_index.get(index) or {}).values():
+            if info.os_type == "knn_vector" and info.dimension:
+                return info
+        return None
 
     def get_field(self, index: str, path: str) -> FieldInfo | None:
         return (self._by_index.get(index) or {}).get(path)

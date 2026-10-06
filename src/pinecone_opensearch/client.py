@@ -225,9 +225,15 @@ class OpenSearch:
                 # fall through to fetch-based count
                 pass
 
-        # Filter-only / general: translate to fetch plan and page up to 10k
         search_body = {"size": 10_000, "query": query}
         plan, _logical, _src = self._plan_search(index, search_body, routing=routing)
+        if plan.plan == "fetch" and len(plan.calls) == 1 and not plan.calls[0].request.get("ids"):
+            try:
+                return shape_mod.shape_count_response(self._count_matching(logical, plan.calls[0]))
+            except Exception as exc:  # noqa: BLE001
+                raise_as_opensearch(exc)
+                raise
+
         for call in plan.calls:
             call.request["include_fields"] = []
         # Force fetch-style when possible by executing and counting hits without paging slice issues
@@ -247,6 +253,40 @@ class OpenSearch:
         except Exception as exc:  # noqa: BLE001
             raise_as_opensearch(exc)
             raise
+
+    def _count_matching(self, logical: str, call: Any) -> int:
+        """Exact count of documents matching a filter-only plan.
+
+        One ids-only filtered search answers counts under ``_COUNT_SEARCH_TOP_K``;
+        larger results (or indexes without a dense field) page through fetch/list.
+        """
+        docs = self._backend.documents(call.index)
+        filt = call.request.get("filter")
+        dense = self.registry.dense_field(logical)
+        if dense is not None and self.config.limits.get("count_strategy", "search") == "search":
+            kwargs = {"filter": filt} if filt else {}
+            resp = docs.search(
+                namespace=call.namespace,
+                top_k=_COUNT_SEARCH_TOP_K,
+                include_fields=[],
+                score_by=[{"type": "dense_vector", "field": dense.pinecone_name, "values": [1.0] * int(dense.dimension or 0)}],
+                **kwargs,
+            )
+            matched = len(list(getattr(resp, "matches", None) or []))
+            if matched < _COUNT_SEARCH_TOP_K:
+                return matched
+        if not filt:
+            return sum(1 for _ in docs.list(namespace=call.namespace))
+        total = 0
+        token = None
+        while True:
+            resp = docs.fetch(namespace=call.namespace, filter=filt, include_fields=[], pagination_token=token)
+            documents = getattr(resp, "documents", None) or {}
+            total += len(documents)
+            pagination = getattr(resp, "pagination", None)
+            token = getattr(pagination, "next", None) if pagination else None
+            if not token:
+                return total
 
     def get(
         self,
@@ -771,6 +811,7 @@ def _iter_bulk_actions(body: Any, *, default_index: str | None) -> list[dict[str
 
 
 _MAX_UPSERT_DOCS = 1000
+_COUNT_SEARCH_TOP_K = 10_000
 _MAX_UPSERT_BYTES = 2 * 1024 * 1024 - 64 * 1024
 
 
