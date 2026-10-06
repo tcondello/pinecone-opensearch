@@ -7,7 +7,9 @@ set -euo pipefail
 : "${OS_VOLUME_GB:=20}"
 export AWS_REGION
 
-STATE_FILE="$(cd "$(dirname "$0")/../.." && pwd)/.aws-domain"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+STATE_FILE="$ROOT/.aws-domain"
+IPS_FILE="$ROOT/.aws-domain-ips"
 
 domain_name() {
   if [[ -f "$STATE_FILE" ]]; then
@@ -19,22 +21,34 @@ domain_name() {
   fi
 }
 
-access_policy() {
-  local name="$1" ip="$2" account
-  account="$(aws sts get-caller-identity --query Account --output text)"
-  echo "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"*\"},\"Action\":\"es:ESHttp*\",\"Resource\":\"arn:aws:es:${AWS_REGION}:${account}:domain/${name}/*\",\"Condition\":{\"IpAddress\":{\"aws:SourceIp\":[\"${ip}/32\"]}}}]}"
-}
-
 current_ip() {
   curl -fsS https://checkip.amazonaws.com | tr -d '[:space:]'
 }
 
-cmd_create() {
-  local name ip policy
+allowed_ips_json() {
+  sort -u "$IPS_FILE" | awk 'NF {printf "%s\"%s/32\"", (n++ ? "," : ""), $1}'
+}
+
+access_policy() {
+  local name="$1" account
+  account="$(aws sts get-caller-identity --query Account --output text)"
+  echo "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"*\"},\"Action\":\"es:ESHttp*\",\"Resource\":\"arn:aws:es:${AWS_REGION}:${account}:domain/${name}/*\",\"Condition\":{\"IpAddress\":{\"aws:SourceIp\":[$(allowed_ips_json)]}}}]}"
+}
+
+push_policy() {
+  local name
   name="$(domain_name)"
-  ip="$(current_ip)"
-  policy="$(access_policy "$name" "$ip")"
-  echo "Creating domain ${name} (${OS_ENGINE_VERSION}, ${OS_INSTANCE_TYPE}) open to ${ip}/32"
+  echo "Allowing $(sort -u "$IPS_FILE" | paste -sd, -) on ${name}"
+  aws opensearch update-domain-config --domain-name "$name" \
+    --access-policies "$(access_policy "$name")" \
+    --query 'DomainConfig.AccessPolicies.Status.State' --output text
+}
+
+cmd_create() {
+  local name
+  name="$(domain_name)"
+  current_ip >>"$IPS_FILE"
+  echo "Creating domain ${name} (${OS_ENGINE_VERSION}, ${OS_INSTANCE_TYPE})"
   aws opensearch create-domain \
     --domain-name "$name" \
     --engine-version "$OS_ENGINE_VERSION" \
@@ -43,7 +57,7 @@ cmd_create() {
     --node-to-node-encryption-options Enabled=true \
     --encryption-at-rest-options Enabled=true \
     --domain-endpoint-options EnforceHTTPS=true \
-    --access-policies "$policy" \
+    --access-policies "$(access_policy "$name")" \
     --tag-list Key=project,Value=pinecone-opensearch Key=owner,Value="${USER}" \
     --query 'DomainStatus.ARN' --output text
 }
@@ -72,27 +86,37 @@ cmd_endpoint() {
 }
 
 cmd_allow_ip() {
-  local name ip
-  name="$(domain_name)"
-  ip="$(current_ip)"
-  echo "Updating ${name} access policy to ${ip}/32"
-  aws opensearch update-domain-config --domain-name "$name" \
-    --access-policies "$(access_policy "$name" "$ip")" \
-    --query 'DomainConfig.AccessPolicies.Status.State' --output text
+  if [[ $# -eq 0 ]]; then
+    current_ip >>"$IPS_FILE"
+  else
+    printf '%s\n' "$@" >>"$IPS_FILE"
+  fi
+  push_policy
+}
+
+cmd_revoke_ip() {
+  local tmp
+  tmp="$(mktemp)"
+  grep -vxF -f <(printf '%s\n' "$@") "$IPS_FILE" >"$tmp" || true
+  mv "$tmp" "$IPS_FILE"
+  push_policy
 }
 
 cmd_delete() {
   local name
   name="$(domain_name)"
   aws opensearch delete-domain --domain-name "$name" --query 'DomainStatus.DomainName' --output text
-  rm -f "$STATE_FILE"
+  rm -f "$STATE_FILE" "$IPS_FILE"
 }
 
-case "${1:-}" in
+cmd="${1:-}"
+shift || true
+case "$cmd" in
   create) cmd_create ;;
   wait) cmd_wait ;;
   endpoint) cmd_endpoint ;;
-  allow-ip) cmd_allow_ip ;;
+  allow-ip) cmd_allow_ip "$@" ;;
+  revoke-ip) cmd_revoke_ip "$@" ;;
   delete) cmd_delete ;;
-  *) echo "usage: $0 {create|wait|endpoint|allow-ip|delete}" >&2; exit 2 ;;
+  *) echo "usage: $0 {create|wait|endpoint|allow-ip [ip...]|revoke-ip ip...|delete}" >&2; exit 2 ;;
 esac

@@ -19,6 +19,9 @@ load_dotenv(ROOT / ".env")
 
 
 def os_hosts() -> list[dict]:
+    cached = LIVE / "os_hosts.json"
+    if cached.exists():
+        return json.loads(cached.read_text())
     out = subprocess.run(
         [str(ROOT / "scripts/aws/opensearch_domain.sh"), "endpoint"],
         check=True, capture_output=True, text=True,

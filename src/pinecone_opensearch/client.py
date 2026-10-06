@@ -360,7 +360,7 @@ class OpenSearch:
                 pinecone_index=index_cfg.pinecone_index,
                 namespace=ns,
                 ids=[doc_id],
-                timeout_s=float(self.config.limits.get("refresh_timeout_s", 90)),
+                **_refresh_opts(self.config),
             )
         return shape_mod.shape_index_response(index=logical, doc_id=doc_id, result="created")
 
@@ -408,7 +408,7 @@ class OpenSearch:
                 pinecone_index=index_cfg.pinecone_index,
                 namespace=ns,
                 ids=[id],
-                timeout_s=float(self.config.limits.get("refresh_timeout_s", 90)),
+                **_refresh_opts(self.config),
             )
         return shape_mod.shape_index_response(index=logical, doc_id=id, result="created")
 
@@ -471,7 +471,6 @@ class OpenSearch:
 
         self._record_writes(index_cfg.pinecone_index, [id])
         if refresh in (True, "true", "wait_for"):
-            timeout_s = float(self.config.limits.get("refresh_timeout_s", 90))
             if result == "updated":
                 wait_for_fields(
                     self._backend,
@@ -479,7 +478,7 @@ class OpenSearch:
                     namespace=ns,
                     doc_id=id,
                     expected=converted,
-                    timeout_s=timeout_s,
+                    **_refresh_opts(self.config),
                 )
             else:
                 wait_for_ids(
@@ -487,7 +486,7 @@ class OpenSearch:
                     pinecone_index=index_cfg.pinecone_index,
                     namespace=ns,
                     ids=[id],
-                    timeout_s=timeout_s,
+                    **_refresh_opts(self.config),
                 )
         return shape_mod.shape_update_response(index=logical, doc_id=id, result=result)
 
@@ -652,6 +651,13 @@ class _SearchPipelineClient:
 
     def delete(self, id: str, **kwargs: Any) -> dict[str, Any]:
         return self._client.pipelines.delete(id)
+
+
+def _refresh_opts(config: ClientConfig) -> dict[str, float]:
+    return {
+        "timeout_s": float(config.limits.get("refresh_timeout_s", 90)),
+        "poll_s": float(config.limits.get("refresh_poll_s", 0.25)),
+    }
 
 
 def _get_source_filter(params: dict[str, Any]) -> Any:
@@ -935,7 +941,7 @@ def _execute_bulk(
                     pinecone_index=pc_index,
                     namespace=ns,
                     ids=ids[-1000:],
-                    timeout_s=float(client.config.limits.get("refresh_timeout_s", 90)),
+                    **_refresh_opts(client.config),
                 )
             except Exception:
                 pass

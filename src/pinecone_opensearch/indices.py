@@ -157,6 +157,7 @@ class IndicesClient:
                     pinecone_index=index_cfg.pinecone_index,
                     namespace=ns,
                     ids=ids[-1000:],
+                    poll_s=float(client.config.limits.get("refresh_poll_s", 0.25)),
                     timeout_s=float(client.config.limits.get("refresh_timeout_s", 90)),
                 )
             shards[logical] = {

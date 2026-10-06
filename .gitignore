@@ -13,3 +13,6 @@ uv.lock
 .env
 live/data/
 live/out/
+.aws-domain-ips
+.aws-ec2/
+live/os_hosts.json

@@ -47,4 +47,7 @@ deployment:
   cloud: aws
   region: us-east-1
 
+limits:
+  refresh_poll_s: 0.02
+
 include_pinecone_meta: true
