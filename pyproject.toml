@@ -5,7 +5,7 @@ description = "OpenSearch drop-in client that translates queries and writes to t
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
-authors = [{ name = "Pinecone Systems, Inc." }]
+authors = [{ name = "Tim Condello" }]
 keywords = ["pinecone", "opensearch", "search", "vector", "hybrid"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -31,10 +31,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/pinecone-io/pinecone-opensearch"
-Documentation = "https://github.com/pinecone-io/pinecone-opensearch#readme"
-Repository = "https://github.com/pinecone-io/pinecone-opensearch"
-Issues = "https://github.com/pinecone-io/pinecone-opensearch/issues"
+Homepage = "https://github.com/tcondello/pinecone-opensearch"
+Documentation = "https://github.com/tcondello/pinecone-opensearch#readme"
+Repository = "https://github.com/tcondello/pinecone-opensearch"
+Issues = "https://github.com/tcondello/pinecone-opensearch/issues"
 
 [project.scripts]
 pinecone-opensearch = "pinecone_opensearch.cli:main"

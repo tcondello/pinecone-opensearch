@@ -4,6 +4,8 @@
 
 Change one import and one constructor; keep your query bodies.
 
+> Community project, not an official Pinecone product. Alpha: the surface below has been validated against live OpenSearch and Pinecone (see [Validation](#validation)), but expect rough edges.
+
 ```python
 from pinecone_opensearch import OpenSearch   # was: from opensearchpy import OpenSearch
 
@@ -17,8 +19,8 @@ resp = client.search(index="products", body=body)
 ## Install
 
 ```bash
-pip install pinecone-opensearch
-# or from source
+pip install "git+https://github.com/tcondello/pinecone-opensearch"
+# or from a clone
 uv sync --group dev
 ```
 
@@ -119,12 +121,46 @@ uv run pytest
 
 All unit tests use fake backends — **no live Pinecone or OpenSearch credentials required**.
 
-### Untested here (needs live differential)
+`tests/test_live_regressions.py` pins every bug the live runs below turned up.
 
-- End-to-end latency/recall vs OpenSearch 2.x Docker + real Pinecone index (BEIR / prospect logs)
-- Pinecone Inference embedder live calls
-- Analyzer / BM25 parameter parity
-- Write-to-read visibility timing under production load
+## Validation
+
+The client was run side by side against Amazon OpenSearch Service 2.19 and a Pinecone serverless index (both us-east-1) on [BEIR SciFact](https://github.com/beir-cellar/beir): 5,183 abstracts and 300 judged queries, embedded with `llama-text-embed-v2` (1024 dims). Latency was measured from an EC2 `c7i.large` in the same region.
+
+| Query | Recall@10 OpenSearch / Pinecone | Top-10 overlap | p50 ms OS / PC | p95 ms OS / PC |
+| --- | --- | --- | --- | --- |
+| `match` | 0.770 / 0.770 | 86% | 11 / 18 | 24 / 80 |
+| `knn` | 0.849 / 0.896 | 90% | 12 / 16 | 24 / 60 |
+| `hybrid` (normalization pipeline) | 0.896 / 0.904 | 87% | 18 / 24 | 44 / 92 |
+
+- **Filters:** `term`, `terms`, `range` (numeric and date), `exists`, `must_not`, `bool.should` and boolean flags all translate exactly, both inside `bool` with `match` and inside `knn.filter`. Filtered `count` matches OpenSearch exactly.
+- **Writes and lookups:** `index`, `update`, `delete`, `delete_by_query`, `get` and `mget` all behave like OpenSearch, and `_source` comes back with the mapped types.
+- **Client overhead:** translation takes about 0.1 ms, and searches through the client take the same time as raw Pinecone SDK calls.
+
+### Known gaps
+
+- `refresh="wait_for"` waits until a write can be read by id. Filtered search can briefly lag behind that.
+- Filtered `count` is one search request: about 10–100 ms vs about 5 ms on OpenSearch. It falls back to paging at 10,000 or more matches.
+- Validation so far covers one 5k-document corpus. Larger corpora, analyzer and BM25 parity, and production write loads are still open.
+
+### Reproducing
+
+`live/` holds the harness. The AWS scripts use your default AWS credentials (`AWS_PROFILE`, `AWS_REGION`, default `us-east-1`).
+
+```bash
+echo 'PINECONE_API_KEY=...' > .env
+scripts/aws/opensearch_domain.sh create && scripts/aws/opensearch_domain.sh wait
+cd live && uv run prepare.py && uv run load.py && uv run filters_writes.py load && cd ..
+scripts/aws/ec2_runner.sh create && scripts/aws/ec2_runner.sh setup
+scripts/aws/ec2_runner.sh run live/run_latency.sh
+scripts/aws/ec2_runner.sh terminate && scripts/aws/opensearch_domain.sh delete
+```
+
+The domain costs about $2 a day and the runner about $0.09 an hour, so tear both down when you're done.
+
+## Contributing
+
+Issues and PRs are welcome. Run `uv run pytest` before opening a PR. A bug found against a live cluster should come with a fake-backend regression test in `tests/test_live_regressions.py`.
 
 ## License
 
